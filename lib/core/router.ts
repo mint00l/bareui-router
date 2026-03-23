@@ -18,6 +18,27 @@ export interface Route {
     children?: Route[];
 }
 
+/**
+ * Result of matching a route against a path.
+ */
+export interface RouteMatch {
+    route: Route;
+    params: Record<string, string>;
+    remainingPath: string;
+}
+
+/**
+ * Options used to initialize a router instance.
+ */
+export interface RouterOptions {
+    initialPathname?: string;
+}
+
+/**
+ * A reusable matcher function bound to a route tree.
+ */
+export type RouteMatcher = (path: string) => RouteMatch | null;
+
 // ----------------------------------------------------------------------
 // Route compilation & matching
 // ----------------------------------------------------------------------
@@ -153,10 +174,10 @@ function compileRoute(pattern: string): CompiledRoute {
  * @param path - The current path to match.
  * @returns The matched route, extracted params, and remaining path; or `null` if no route matches.
  */
-function matchRoute(
+export function matchRoute(
     routes: Route[],
     path: string
-): { route: Route; params: Record<string, string>; remainingPath: string } | null {
+): RouteMatch | null {
     let bestMatch: {
         route: Route;
         params: Record<string, string>;
@@ -221,6 +242,16 @@ function matchRoute(
         : null;
 }
 
+/**
+ * Creates a matcher bound to a specific route tree.
+ *
+ * This is useful for tests, route inspection, or app code that wants to
+ * resolve routes without rendering the Router component.
+ */
+export function createRouteMatcher(routes: Route[]): RouteMatcher {
+    return (path: string) => matchRoute(routes, path);
+}
+
 function isBrowser(): boolean {
     return typeof window !== 'undefined' && typeof window.history !== 'undefined';
 }
@@ -239,117 +270,115 @@ function isSameOriginNavigation(to: string): boolean {
 // Reactive router state
 // ----------------------------------------------------------------------
 /**
- * Reactive router state shared by the router component and navigation API.
+ * Reactive router state shared by a router instance.
  */
 type RouterState = {
     pathname: string;
 };
 
-const routerState = reactive<RouterState>({
-    pathname: isBrowser() ? window.location.pathname : '',
-});
-
-let popstateSetup = false;
-
 /**
- * Registers a single global `popstate` listener so browser back/forward
- * navigation updates reactive router state.
+ * Creates an isolated router instance with its own state and helpers.
  *
- * This is idempotent and safe to call multiple times.
+ * This is useful for multiple app roots, tests, embedded widgets, or any
+ * case where you do not want a single global router singleton.
  */
-function setupPopstate() {
-    if (popstateSetup || !isBrowser()) return;
-    popstateSetup = true;
-    
-    window.addEventListener('popstate', () => {
-        routerState.pathname = window.location.pathname;
+export function createRouter(options: RouterOptions = {}) {
+    const routerState = reactive<RouterState>({
+        pathname: options.initialPathname ?? (isBrowser() ? window.location.pathname : ''),
     });
-}
 
-// ----------------------------------------------------------------------
-// Public API
-// ----------------------------------------------------------------------
-/**
- * Programmatically navigates to a new route using the browser history API.
- *
- * This updates both the URL and the reactive router state so the UI rerenders.
- *
- * @param to - The destination path.
- */
-export function navigate(to: string): void {
-    if (!isBrowser()) {
-        routerState.pathname = to;
-        return;
+    let popstateSetup = false;
+
+    /**
+     * Registers a single global `popstate` listener so browser back/forward
+     * navigation updates the instance state.
+     */
+    function setupPopstate() {
+        if (popstateSetup || !isBrowser()) return;
+        popstateSetup = true;
+
+        window.addEventListener('popstate', () => {
+            routerState.pathname = window.location.pathname;
+        });
     }
-    
-    window.history.pushState(null, '', to);
-    routerState.pathname = to;
-}
 
-/**
- * Returns the shared reactive router state.
- *
- * Components can read `pathname` from this object to react to location changes.
- *
- * @returns The reactive router state.
- */
-export function useRouter(): RouterState {
-    return routerState;
-}
+    /**
+     * Programmatically navigates to a new route using the browser history API.
+     */
+    function navigate(to: string): void {
+        if (!isBrowser()) {
+            routerState.pathname = to;
+            return;
+        }
 
-/**
- * Link component that renders an anchor element and performs client-side navigation.
- *
- * The current implementation intercepts clicks and calls `navigate()` so
- * route changes happen without a full page reload.
- *
- * @param to - Target path to navigate to.
- * @param children - Link content.
- */
-export const Link = component(({ to, children }: { to: string; children: Renderable }) => {
-    const handleClick = (e: MouseEvent) => {
-        const anchor = e.currentTarget as HTMLAnchorElement | null;
+        window.history.pushState(null, '', to);
+        routerState.pathname = to;
+    }
 
-        if (!isBrowser()) return;
-        if (e.defaultPrevented) return;
-        if (e.button !== 0) return;
-        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-        if (anchor?.target && anchor.target !== '_self') return;
-        if (anchor?.hasAttribute('download')) return;
-        if (!isSameOriginNavigation(to)) return;
-        
-        e.preventDefault();
-        navigate(to);
-    };
-    return html`<a :href="${to}" @click="${handleClick}">${children}</a>`;
-});
+    /**
+     * Returns the reactive state for this router instance.
+     */
+    function useRouter(): RouterState {
+        return routerState;
+    }
 
-/**
- * Root router component that resolves the current path against a route tree.
- *
- * The router matches the current path, renders the matched route component,
- * and exposes a `children()` function for recursive nested routing.
- *
- * @param routes - The route tree to evaluate.
- * @param path - Optional path override used internally for nested routing.
- */
-export const Router = component(({ routes, path }: { routes: Route[]; path?: string }): Renderable => {
-    setupPopstate();
-    const state = useRouter();
+    /**
+     * Link component bound to this router instance.
+     */
+    const Link = component(({ to, children }: { to: string; children: Renderable }) => {
+        const handleClick = (e: MouseEvent) => {
+            const anchor = e.currentTarget as HTMLAnchorElement | null;
 
-    return html`${() => {
-        const currentPath = normalizePath(path ?? state.pathname);
+            if (!isBrowser()) return;
+            if (e.defaultPrevented) return;
+            if (e.button !== 0) return;
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            if (anchor?.target && anchor.target !== '_self') return;
+            if (anchor?.hasAttribute('download')) return;
+            if (!isSameOriginNavigation(to)) return;
 
-        const match = matchRoute(routes, currentPath);
-        if (!match) return null;
-
-        const { route, params, remainingPath } = match;
-
-        const children = (): Renderable => {
-            if (!route.children || route.children.length === 0) return null;
-            return html`${Router({ routes: route.children, path: remainingPath })}`;
+            e.preventDefault();
+            navigate(to);
         };
 
-        return route.component({ params, children });
-    }}`;
-});
+        return html`<a :href="${to}" @click="${handleClick}">${children}</a>`;
+    });
+
+    /**
+     * Router component bound to this router instance.
+     */
+    const Router = component(({ routes, path }: { routes: Route[]; path?: string }): Renderable => {
+        setupPopstate();
+        const state = useRouter();
+
+        return html`${() => {
+            const currentPath = normalizePath(path ?? state.pathname);
+
+            const match = matchRoute(routes, currentPath);
+            if (!match) return null;
+
+            const { route, params, remainingPath } = match;
+
+            const children = (): Renderable => {
+                if (!route.children || route.children.length === 0) return null;
+                return html`${Router({ routes: route.children, path: remainingPath })}`;
+            };
+
+            return route.component({ params, children });
+        }}`;
+    });
+
+    return {
+        Router,
+        Link,
+        navigate,
+        useRouter,
+    };
+}
+
+const defaultRouter = createRouter();
+
+export const Router = defaultRouter.Router;
+export const Link = defaultRouter.Link;
+export const navigate = defaultRouter.navigate;
+export const useRouter = defaultRouter.useRouter;
