@@ -59,6 +59,54 @@ function normalizePath(path: string): string {
 }
 
 /**
+ * Splits a normalized route pattern into path segments.
+ */
+function splitPathSegments(pattern: string): string[] {
+    const normalized = normalizePath(pattern);
+    return normalized === '' ? [] : normalized.split('/');
+}
+
+/**
+ * Returns a specificity tuple used to rank competing route matches.
+ *
+ * Higher values are more specific:
+ * - more static segments wins
+ * - deeper routes win next
+ * - fewer dynamic params wins last
+ */
+function getRouteSpecificity(pattern: string): [number, number, number] {
+    const segments = splitPathSegments(pattern);
+
+    let staticCount = 0;
+    let paramCount = 0;
+
+    for (const segment of segments) {
+        if (segment.startsWith(':')) {
+            paramCount++;
+        } else {
+            staticCount++;
+        }
+    }
+
+    return [staticCount, segments.length, -paramCount];
+}
+
+/**
+ * Compares two specificity tuples.
+ *
+ * Returns a positive number when `a` is more specific than `b`.
+ */
+function compareRouteSpecificity(
+    a: [number, number, number],
+    b: [number, number, number]
+): number {
+    if (a[0] !== b[0]) return a[0] - b[0];
+    if (a[1] !== b[1]) return a[1] - b[1];
+    if (a[2] !== b[2]) return a[2] - b[2];
+    return 0;
+}
+
+/**
  * Compiles a route pattern into a regular expression and parameter map.
  *
  * Dynamic segments in the form `:name` are converted into capture groups.
@@ -100,6 +148,14 @@ function matchRoute(
     routes: Route[],
     path: string
 ): { route: Route; params: Record<string, string>; remainingPath: string } | null {
+    let bestMatch: {
+        route: Route;
+        params: Record<string, string>;
+        remainingPath: string;
+        specificity: [number, number, number];
+        order: number;
+    } | null = null;
+    
     const normalized = normalizePath(path);
 
     const indexRoute = routes.find(r => r.path === '');
@@ -111,7 +167,8 @@ function matchRoute(
         };
     }
 
-    for (const route of routes) {
+    for (let index = 0; index < routes.length; index++) {
+        const route = routes[index];
         if (route.path === '') continue;
         const { regex, paramNames } = compileRoute(route.path);
         const match = regex.exec(normalized);
@@ -119,13 +176,40 @@ function matchRoute(
             const matched = match[0];
             const remaining = normalized.slice(matched.length).replace(/^\/+/, '');
             const params: Record<string, string> = {};
+
             for (let i = 0; i < paramNames.length; i++) {
                 params[paramNames[i]] = match[i + 1];
             }
-            return { route, params, remainingPath: remaining };
+
+            const specificity = getRouteSpecificity(route.path);
+            const candidate = {
+                route,
+                params,
+                remainingPath: remaining,
+                specificity,
+                order: index,
+            };
+            
+            if (
+                !bestMatch ||
+                compareRouteSpecificity(candidate.specificity, bestMatch.specificity) > 0 ||
+                (
+                    compareRouteSpecificity(candidate.specificity, bestMatch.specificity) === 0 &&
+                    candidate.order < bestMatch.order
+                )
+            ) {
+                bestMatch = candidate;
+            }
         }
     }
-    return null;
+    
+    return bestMatch
+        ? {
+            route: bestMatch.route,
+            params: bestMatch.params,
+            remainingPath: bestMatch.remainingPath,
+        }
+        : null;
 }
 
 function isBrowser(): boolean {
