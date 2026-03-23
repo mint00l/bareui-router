@@ -55,7 +55,15 @@ function escapeRegex(value: string): string {
  * formats the path.
  */
 function normalizePath(path: string): string {
-    return path.replace(/^\/+|\/+$/g, '');
+    return path.replace(/\/+/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+function decodeParamValue(value: string): string {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return value;
+    }
 }
 
 /**
@@ -117,12 +125,13 @@ function compareRouteSpecificity(
  * @returns The compiled regex and the ordered parameter names.
  */
 function compileRoute(pattern: string): CompiledRoute {
-    const cached = routeCache.get(pattern);
+    const normalizedPattern = normalizePath(pattern);
+    const cached = routeCache.get(normalizedPattern);
     if (cached) return cached;
 
     const paramNames: string[] = [];
 
-    const escapedPattern = escapeRegex(pattern); 
+    const escapedPattern = escapeRegex(normalizedPattern); 
     const regexPattern = escapedPattern.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_, name) => {
         paramNames.push(name);
         return '([^/]+)';
@@ -130,7 +139,7 @@ function compileRoute(pattern: string): CompiledRoute {
 
     const regex = new RegExp(`^${regexPattern}(?=/|$)`);
     const compiled = { regex, paramNames };
-    routeCache.set(pattern, compiled);
+    routeCache.set(normalizedPattern, compiled);
     return compiled;
 }
 
@@ -158,7 +167,7 @@ function matchRoute(
     
     const normalized = normalizePath(path);
 
-    const indexRoute = routes.find(r => r.path === '');
+    const indexRoute = routes.find(r => normalizePath(r.path) === '');
     if (indexRoute && normalized === '') {
         return {
             route: indexRoute,
@@ -169,7 +178,7 @@ function matchRoute(
 
     for (let index = 0; index < routes.length; index++) {
         const route = routes[index];
-        if (route.path === '') continue;
+        if (normalizePath(route.path) === '') continue;
         const { regex, paramNames } = compileRoute(route.path);
         const match = regex.exec(normalized);
         if (match) {
@@ -178,7 +187,7 @@ function matchRoute(
             const params: Record<string, string> = {};
 
             for (let i = 0; i < paramNames.length; i++) {
-                params[paramNames[i]] = match[i + 1];
+                params[paramNames[i]] = decodeParamValue( match[i + 1]);
             }
 
             const specificity = getRouteSpecificity(route.path);
@@ -202,7 +211,7 @@ function matchRoute(
             }
         }
     }
-    
+
     return bestMatch
         ? {
             route: bestMatch.route,
