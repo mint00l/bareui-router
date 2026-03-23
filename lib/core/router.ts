@@ -1,4 +1,4 @@
-// src/router.ts
+// ./lib/core/router.ts
 
 import { reactive, component, html, type Renderable } from 'bareui-core';
 
@@ -23,16 +23,27 @@ interface CompiledRoute {
 
 const routeCache = new Map<string, CompiledRoute>();
 
+function escapeRegex(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizePath(path: string): string {
+    return path.replace(/^\/+|\/+$/g, '');
+}
+
 function compileRoute(pattern: string): CompiledRoute {
     const cached = routeCache.get(pattern);
     if (cached) return cached;
 
     const paramNames: string[] = [];
-    const regexPattern = pattern.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_, name) => {
+
+    const escapedPattern = escapeRegex(pattern); 
+    const regexPattern = escapedPattern.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_, name) => {
         paramNames.push(name);
         return '([^/]+)';
     });
-    const regex = new RegExp(`^${regexPattern}`);
+
+    const regex = new RegExp(`^${regexPattern}(?=/|$)`);
     const compiled = { regex, paramNames };
     routeCache.set(pattern, compiled);
     return compiled;
@@ -42,7 +53,7 @@ function matchRoute(
     routes: Route[],
     path: string
 ): { route: Route; params: Record<string, string>; remainingPath: string } | null {
-    const normalized = path.replace(/^\/+|\/+$/g, '');
+    const normalized = normalizePath(path);
 
     const indexRoute = routes.find(r => r.path === '');
     if (indexRoute && normalized === '') {
@@ -120,23 +131,21 @@ export const Link = component(({ to, children }: { to: string; children: Rendera
  * Router component – recursively renders the matched route tree.
  * The matching logic is placed inside a function that is re‑evaluated whenever the URL changes.
  */
-export const Router = component(({ routes, basePath = '' }: { routes: Route[]; basePath?: string }): Renderable => {
+export const Router = component(({ routes, path }: { routes: Route[]; path?: string }): Renderable => {
     setupPopstate();
     const state = useRouter();
 
     return html`${() => {
-        const fullPath = state.pathname.slice(1); // remove leading slash
-        const relativePath = fullPath.slice(basePath.length).replace(/^\/+/, '');
+        const currentPath = normalizePath(path ?? state.pathname);
 
-        const match = matchRoute(routes, relativePath);
+        const match = matchRoute(routes, currentPath);
         if (!match) return null;
 
-        const { route, params } = match;
+        const { route, params, remainingPath } = match;
 
         const children = (): Renderable => {
             if (!route.children || route.children.length === 0) return null;
-            const newBasePath = basePath + (route.path ? `/${route.path}` : '');
-            return html`${Router({ routes: route.children, basePath: newBasePath })}`;
+            return html`${Router({ routes: route.children, path: remainingPath })}`;
         };
 
         return route.component({ params, children });
