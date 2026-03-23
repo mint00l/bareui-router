@@ -1,6 +1,6 @@
 {
   "name": "bareui-router",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Routing for bareui-core",
   "license": "MIT",
   "author": "mintool <workspacecristi@gmail.com>",
