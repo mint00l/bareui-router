@@ -132,6 +132,16 @@ function isBrowser(): boolean {
     return typeof window !== 'undefined' && typeof window.history !== 'undefined';
 }
 
+function isSameOriginNavigation(to: string): boolean {
+    if (!isBrowser()) return false;
+
+    try {
+        return new URL(to, window.location.href).origin === window.location.origin;
+    } catch {
+        return false;
+    }
+}
+
 // ----------------------------------------------------------------------
 // Reactive router state
 // ----------------------------------------------------------------------
@@ -205,6 +215,16 @@ export function useRouter(): RouterState {
  */
 export const Link = component(({ to, children }: { to: string; children: Renderable }) => {
     const handleClick = (e: MouseEvent) => {
+        const anchor = e.currentTarget as HTMLAnchorElement | null;
+
+        if (!isBrowser()) return;
+        if (e.defaultPrevented) return;
+        if (e.button !== 0) return;
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        if (anchor?.target && anchor.target !== '_self') return;
+        if (anchor?.hasAttribute('download')) return;
+        if (!isSameOriginNavigation(to)) return;
+        
         e.preventDefault();
         navigate(to);
     };
